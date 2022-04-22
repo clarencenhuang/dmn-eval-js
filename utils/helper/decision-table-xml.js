@@ -2,17 +2,23 @@
 *  ©2017-2018 HBT Hamburger Berater Team GmbH
 *  All Rights Reserved.
 */
-const DmnModdle = require('dmn-moddle');
+let DmnModdle = require('dmn-moddle');
 const logger = require('loglevel').getLogger('dmn-eval-js');
 const moment = require('moment');
 const feel = require('../../dist/feel');
 
 function createModdle(additionalPackages, options) {
+  // in the browser DmnModdle is an es6 module...
+  if (DmnModdle.__esModule && typeof DmnModdle.default === 'function') {
+    DmnModdle = DmnModdle.default;
+  }
   return new DmnModdle(additionalPackages, options);
 }
 
 function readDmnXml(xml, opts, callback) {
-  return createModdle().fromXML(xml, 'dmn:Definitions', opts, callback);
+  const moddle = createModdle();
+  return moddle.fromXML(xml, 'dmn:Definitions', opts)
+    .then((data) => callback(null, data), (err) => callback(err));
 }
 
 function parseRule(rule, idx) {
@@ -128,10 +134,11 @@ function parseDecisions(drgElements) {
 
 function parseDmnXml(xml, opts) {
   return new Promise((resolve, reject) => {
-    readDmnXml(xml, opts, (err, dmnContent) => {
+    readDmnXml(xml, opts, (err, data) => {
       if (err) {
         reject(err);
       } else {
+        const dmnContent = data.rootElement;
         try {
           const decisions = parseDecisions(dmnContent.drgElement);
           resolve(decisions);
@@ -236,24 +243,25 @@ function evaluateRule(rule, resolvedInputExpressions, outputNames, context) {
   return { matched: true, output: outputObject };
 }
 
-function evaluateDecision(decisionId, decisions, context, alreadyEvaluatedDecisions) {
-  if (!alreadyEvaluatedDecisions) {
-    alreadyEvaluatedDecisions = []; // eslint-disable-line no-param-reassign
-  }
+function evaluateDecision(decisionId, decisions, context, opts) {
+  const alreadyEvaluatedDecisions = opts.alreadyEvaluatedDecisions || {};
+  const skipDependencies = opts.skipDependencies || false;
   const decision = decisions[decisionId];
   if (decision === undefined) {
     throw new Error(`No such decision "${decisionId}"`);
   }
 
-  // execute required decisions recursively first
-  for (let i = 0; i < decision.requiredDecisions.length; i += 1) {
-    const reqDecision = decision.requiredDecisions[i];
-    // check if the decision was already executed, to prevent unecessary evaluations if multiple decisions require the same decision
-    if (!alreadyEvaluatedDecisions[reqDecision]) {
-      logger.debug(`Need to evaluate required decision ${reqDecision}`);
-      const requiredResult = evaluateDecision(reqDecision, decisions, context, alreadyEvaluatedDecisions); // eslint-disable-line no-await-in-loop
-      mergeContext(context, requiredResult);
-      alreadyEvaluatedDecisions[reqDecision] = true; // eslint-disable-line no-param-reassign
+  if (!skipDependencies) {
+    // execute required decisions recursively first
+    for (let i = 0; i < decision.requiredDecisions.length; i += 1) {
+      const reqDecision = decision.requiredDecisions[i];
+      // check if the decision was already executed, to prevent unecessary evaluations if multiple decisions require the same decision
+      if (!alreadyEvaluatedDecisions[reqDecision]) {
+        logger.debug(`Need to evaluate required decision ${reqDecision}`);
+        const requiredResult = evaluateDecision(reqDecision, decisions, context, { alreadyEvaluatedDecisions }); // eslint-disable-line no-await-in-loop
+        mergeContext(context, requiredResult);
+        alreadyEvaluatedDecisions[reqDecision] = true; // eslint-disable-line no-param-reassign
+      }
     }
   }
   logger.info(`Evaluating decision "${decisionId}"...`);
@@ -376,5 +384,5 @@ function dumpTree(node, indent) {
 }
 
 module.exports = {
-  readDmnXml, parseDmnXml, parseDecisions, evaluateDecision, dumpTree,
+  readDmnXml, parseDmnXml, parseDecisions, evaluateDecision, dumpTree, createModdle,
 };
